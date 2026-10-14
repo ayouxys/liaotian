@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>无痕聊天</title>
+<style>
+  :root {
+    --bg: #ededed;
+    --header-bg: #ededed;
+    --bubble-me: #95ec69;
+    --bubble-other: #ffffff;
+    --text: #1a1a1a;
+    --muted: #999999;
+    --accent: #07c160;
+    --danger: #fa5151;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 登录页 */
+  #login {
+    position: fixed; inset: 0; z-index: 100;
+    background: #fff;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  #login .logo {
+    font-size: 56px; margin-bottom: 16px;
+  }
+  #login h1 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+  #login .sub { color: var(--muted); font-size: 14px; margin-bottom: 32px; text-align: center; }
+  #login input {
+    width: 100%; max-width: 320px;
+    padding: 14px 16px; font-size: 16px;
+    border: 1px solid #ddd; border-radius: 10px;
+    outline: none; margin-bottom: 16px;
+  }
+  #login input:focus { border-color: var(--accent); }
+  #login button {
+    width: 100%; max-width: 320px;
+    padding: 14px; font-size: 17px; font-weight: 600;
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 10px; cursor: pointer;
+  }
+  #login button:active { opacity: 0.85; }
+
+  /* 头部 */
+  header {
+    background: var(--header-bg);
+    padding: 12px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #e0e0e0;
+    position: relative; z-index: 10;
+  }
+  header .left { display: flex; align-items: center; gap: 10px; }
+  header .back { font-size: 22px; cursor: pointer; color: #333; }
+  header .title { font-size: 17px; font-weight: 600; }
+  header .online { font-size: 12px; color: var(--muted); }
+  header .menu { font-size: 22px; cursor: pointer; color: #333; padding: 4px; }
+
+  /* 下拉菜单 */
+  #menu {
+    position: absolute; top: 48px; right: 12px;
+    background: #fff; border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    min-width: 160px; display: none; z-index: 20;
+  }
+  #menu.show { display: block; }
+  #menu button {
+    display: block; width: 100%; text-align: left;
+    padding: 12px 16px; font-size: 15px;
+    border: none; background: none; cursor: pointer;
+  }
+  #menu button:hover { background: #f5f5f5; }
+  #menu button.danger { color: var(--danger); }
+
+  /* 消息区 */
+  #messages {
+    flex: 1; overflow-y: auto; padding: 16px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .msg { margin-bottom: 16px; display: flex; }
+  .msg.me { justify-content: flex-end; }
+  .msg .wrap { max-width: 72%; display: flex; flex-direction: column; }
+  .msg.me .wrap { align-items: flex-end; }
+  .msg .name { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .msg .bubble {
+    padding: 10px 14px; border-radius: 8px;
+    font-size: 16px; line-height: 1.5;
+    word-break: break-word; white-space: pre-wrap;
+    position: relative;
+  }
+  .msg.me .bubble { background: var(--bubble-me); }
+  .msg.other .bubble { background: var(--bubble-other); }
+  .msg .time { font-size: 11px; color: #bbb; margin-top: 4px; }
+
+  /* 系统提示 */
+  .sys {
+    text-align: center; font-size: 12px; color: var(--muted);
+    margin: 12px 0; padding: 4px 12px;
+  }
+
+  /* 输入区 */
+  footer {
+    background: #f7f7f7; padding: 8px 12px;
+    display: flex; align-items: flex-end; gap: 8px;
+    border-top: 1px solid #e0e0e0;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  footer textarea {
+    flex: 1; resize: none; padding: 10px 12px;
+    font-size: 16px; line-height: 1.4;
+    border: none; border-radius: 6px;
+    outline: none; max-height: 100px;
+    font-family: inherit;
+  }
+  footer #burnBtn {
+    width: auto; min-width: 58px; height: 40px; flex-shrink: 0;
+    padding: 0 10px;
+    background: #fff; border: 1px solid #e0e0e0;
+    border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+    transition: all 0.15s;
+    color: #999;
+  }
+  footer #burnBtn .burn-icon { font-size: 18px; filter: grayscale(1); opacity: 0.5; }
+  footer #burnBtn .burn-label { font-size: 13px; }
+  footer #burnBtn.active {
+    background: #ff9800; border-color: #ff9800; color: #fff;
+  }
+  footer #burnBtn.active .burn-icon { filter: none; opacity: 1; }
+
+  /* 图片按钮 */
+  footer #imgBtn {
+    width: 40px; height: 40px; flex-shrink: 0;
+    background: #fff; border: 1px solid #e0e0e0;
+    border-radius: 6px; font-size: 20px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  footer #imgBtn:active { background: #f0f0f0; }
+
+  /* 图片气泡 */
+  .msg .bubble.img-bubble {
+    padding: 4px; background: transparent; overflow: hidden;
+  }
+  .msg .bubble.img-bubble img {
+    display: block; max-width: 200px; max-height: 280px;
+    border-radius: 6px; cursor: pointer;
+  }
+  footer button {
+    width: 64px; height: 40px; flex-shrink: 0;
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 6px; font-size: 16px; font-weight: 600;
+    cursor: pointer;
+  }
+  footer button:active { opacity: 0.85; }
+
+  /* 阅后即焚气泡 */
+  .msg .bubble.burn-hidden {
+    background: #fff3e0;
+    border: 1px dashed #ff9800;
+    color: #e65100;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    font-weight: 600;
+  }
+  .msg .bubble.burn-revealed {
+    background: #fff8e1;
+    border: 1px solid #ffc107;
+  }
+
+  /* 清空遮罩确认 */
+  #confirm {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,0.5);
+    display: none; align-items: center; justify-content: center;
+  }
+  #confirm.show { display: flex; }
+  #confirm .box {
+    background: #fff; border-radius: 12px;
+    width: 280px; padding: 24px; text-align: center;
+  }
+  #confirm .box p { font-size: 16px; margin-bottom: 20px; }
+  #confirm .btns { display: flex; gap: 12px; }
+  #confirm .btns button {
+    flex: 1; padding: 12px; font-size: 15px;
+    border: none; border-radius: 8px; cursor: pointer;
+  }
+  #confirm .cancel { background: #f2f2f2; color: #333; }
+  #confirm .ok { background: var(--danger); color: #fff; }
+
+  /* 空状态 */
+  #empty {
+    display: none; text-align: center; color: var(--muted);
+    padding-top: 40%; font-size: 14px;
+  }
+
+  /* 悬浮球 */
+  #floatBall {
+    position: fixed; right: 16px; bottom: 90px;
+    width: 52px; height: 52px; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    font-size: 24px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; z-index: 300;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    user-select: none; -webkit-user-select: none;
+    transition: opacity 0.2s;
+  }
+  #floatClose {
+    position: fixed; right: 12px; bottom: 148px;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #999; color: #fff;
+    font-size: 12px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; z-index: 301;
+    opacity: 0.8;
+  }
+  #floatClose:hover { opacity: 1; }
+
+  /* 悬浮小窗模式：主体缩小 */
+  body.minimized header,
+  body.minimized #messages,
+  body.minimized footer,
+  body.minimized #empty {
+    display: none !important;
+  }
+</style>
+</head>
+<body>
+
+  <!-- 登录 -->
+  <div id="login">
+    <div class="logo">💬</div>
+    <h1>无痕聊天</h1>
+    <div class="sub">普通聊天默认保存 · 可一键清空<br>点 🔥 可选「阅后即焚」· 不留痕迹</div>
+    <input id="nameInput" type="text" placeholder="输入你的昵称" maxlength="30">
+    <input id="pwdInput" type="password" placeholder="输入进入密码" maxlength="20" inputmode="numeric">
+    <div id="pwdError" style="display:none;color:#fa5151;font-size:14px;margin-bottom:12px;">密码错误，请重试</div>
+    <button id="joinBtn">进入聊天</button>
+  </div>
+
+  <!-- 头部 -->
+  <header style="display:none;">
+    <div class="left">
+      <span class="title">无痕聊天</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="online" id="onlineCount">0 人在线</span>
+      <span class="menu" id="menuBtn">⋯</span>
+    </div>
+    <div id="menu">
+      <button id="clearBtn" class="danger">🗑 清空全部记录</button>
+      <button id="leaveBtn">🚪 退出</button>
+    </div>
+  </header>
+
+  <!-- 消息 -->
+  <div id="messages" style="display:none;"></div>
+  <div id="empty">暂无消息，开始聊天吧</div>
+
+  <!-- 输入 -->
+  <footer style="display:none;">
+    <button id="imgBtn" title="发送图片">🖼</button>
+    <input type="file" id="imgInput" accept="image/*" style="display:none;">
+    <button id="burnBtn" title="点击切换阅后即焚模式">
+      <span class="burn-icon">🔥</span><span class="burn-label">阅后</span>
+    </button>
+    <textarea id="input" rows="1" placeholder="输入消息…"></textarea>
+    <button id="sendBtn">发送</button>
+  </footer>
+
+  <!-- 悬浮球 -->
+  <div id="floatBall" style="display:none;">💬</div>
+  <div id="floatClose" style="display:none;" title="关闭悬浮球">✕</div>
+
+  <!-- 确认弹窗 -->
+  <div id="confirm">
+    <div class="box">
+      <p>确定清空全部聊天记录？<br><small style="color:#999;font-size:13px;">此操作不可恢复，所有人都会看到清空</small></p>
+      <div class="btns">
+        <button class="cancel" id="confirmCancel">取消</button>
+        <button class="ok" id="confirmOk">清空</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const loginEl = $('login');
+  const headerEl = document.querySelector('header');
+  const messagesEl = $('messages');
+  const emptyEl = $('empty');
+  const footerEl = document.querySelector('footer');
+  const input = $('input');
+  const nameInput = $('nameInput');
+  const onlineCount = $('onlineCount');
+  const menu = $('menu');
+
+  let ws = null;
+  let nickname = '';
+  let selfId = '';
+  let pwdValue = '';     // 进入密码（发送给服务端校验）
+  let burnMode = false; // 是否开启阅后即焚
+  let burnAfter = 5;    // 查看后删除秒数（服务端下发）
+  let isMinimized = false; // 是否悬浮小窗模式
+  let floatClosed = false; // 悬浮球是否被关闭
+
+  // ===== 进入聊天（密码由服务端校验） =====
+  function enter() {
+    const pwd = $('pwdInput').value.trim();
+    if (!pwd) {
+      $('pwdError').textContent = '请输入密码';
+      $('pwdError').style.display = 'block';
+      $('pwdInput').focus();
+      return;
+    }
+    pwdValue = pwd; // 暂存，连接成功后随 join 发给服务端校验
+    nickname = nameInput.value.trim() || '匿名';
+    loginEl.style.display = 'none';
+    headerEl.style.display = 'flex';
+    messagesEl.style.display = 'block';
+    footerEl.style.display = 'flex';
+    $('floatBall').style.display = 'flex';
+    $('floatClose').style.display = 'flex';
+    floatClosed = false;
+    connect();
+  }
+
+  // 密码错误：回到登录页显示错误
+  function showAuthFailed(text) {
+    if (ws) { try { ws.close(); } catch (_) {} }
+    ws = null;
+    headerEl.style.display = 'none';
+    messagesEl.style.display = 'none';
+    footerEl.style.display = 'none';
+    $('floatBall').style.display = 'none';
+    $('floatClose').style.display = 'none';
+    loginEl.style.display = 'flex';
+    $('pwdError').textContent = text || '密码错误，请重试';
+    $('pwdError').style.display = 'block';
+    $('pwdInput').value = '';
+    $('pwdInput').focus();
+  }
+
+  // ===== 连接 WebSocket =====
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'join', name: nickname, password: pwdValue }));
+    };
+
+    ws.onmessage = (ev) => {
+      let data;
+      try { data = JSON.parse(ev.data); } catch (_) { return; }
+      handleMessage(data);
+    };
+
+    ws.onclose = () => {
+      // 断线重连
+      if (headerEl.style.display !== 'none') {
+        addSystem('连接已断开，正在重连…');
+        setTimeout(connect, 2000);
+      }
+    };
+    ws.onerror = () => {};
+  }
+
+  // ===== 处理服务端消息 =====
+  function handleMessage(data) {
+    switch (data.type) {
+      case 'auth_failed':
+        // 密码错误，回到登录页
+        showAuthFailed(data.text);
+        break;
+
+      case 'history':
+        selfId = data.selfId;
+        burnAfter = data.burnAfter || 5;
+        messagesEl.innerHTML = '';
+        (data.messages || []).forEach(m => renderMessage(m));
+        updateEmpty();
+        if (data.autoClear > 0) {
+          addSystem('⚠️ 本房间已开启定时清空：每 ' + data.autoClear + ' 秒自动清除');
+        } else {
+          addSystem('欢迎「' + nickname + '」，点 🔥 发阅后即焚消息');
+        }
+        break;
+
+      case 'chat':
+        renderMessage(data.message);
+        break;
+
+      case 'revealed':
+        // 查看端：把占位气泡替换为明文，并倒计时删除
+        revealMessage(data.message);
+        break;
+
+      case 'burned':
+        // 其他端：显示"对方已查看，即将消失"
+        markBurned(data.id, data.text);
+        break;
+
+      case 'remove':
+        // 从所有端删除该消息
+        removeMessage(data.id);
+        break;
+
+      case 'presence':
+        onlineCount.textContent = data.online.length + ' 人在线';
+        break;
+
+      case 'cleared':
+        messagesEl.innerHTML = '';
+        emptyEl.style.display = 'block';
+        addSystem(data.auto ? '🕐 已自动清空全部记录' : '🗑 聊天记录已被清空');
+        break;
+
+      case 'error':
+        addSystem('⚠️ ' + data.text);
+        break;
+    }
+  }
+
+  // ===== 渲染消息 =====
+  function renderMessage(m) {
+    const me = m.name === nickname;
+    const div = document.createElement('div');
+    div.className = 'msg ' + (me ? 'me' : 'other');
+    div.dataset.id = m.id;
+    const time = new Date(m.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+    // 外层 wrap
+    const wrap = document.createElement('div');
+    wrap.className = 'wrap';
+
+    // 名字
+    if (!me) {
+      const nameEl = document.createElement('div');
+      nameEl.className = 'name';
+      nameEl.textContent = m.name;
+      wrap.appendChild(nameEl);
+    }
+
+    // 气泡内容
+    if (m.burn && m.hidden) {
+      // 阅后即焚，未查看：占位卡片
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble burn-hidden';
+      bubble.setAttribute('data-reveal', m.id);
+      bubble.textContent = '🔥 阅后即焚消息 · 点击查看';
+      wrap.appendChild(bubble);
+    } else {
+      // 普通 / 阅后即焚可见内容
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble' + (m.burn ? ' burn-revealed' : '');
+      if (m.image) {
+        // 用 DOM 安全创建图片，避免 base64 乱码
+        bubble.className = 'bubble img-bubble' + (m.burn ? ' burn-revealed' : '');
+        const img = document.createElement('img');
+        img.src = m.image;
+        img.alt = '图片';
+        img.addEventListener('click', () => viewImage(m.image));
+        bubble.appendChild(img);
+      } else {
+        bubble.textContent = m.text || '';
+      }
+      if (m.burn) {
+        const tag = document.createElement('span');
+        tag.style.cssText = 'font-size:11px;color:#e65100;';
+        tag.textContent = ' 🔥';
+        bubble.appendChild(tag);
+      }
+      wrap.appendChild(bubble);
+    }
+
+    // 时间
+    const timeEl = document.createElement('div');
+    timeEl.className = 'time';
+    timeEl.textContent = time;
+    wrap.appendChild(timeEl);
+
+    div.appendChild(wrap);
+    messagesEl.appendChild(div);
+    scrollBottom();
+    emptyEl.style.display = 'none';
+  }
+
+  // 查看端：点击占位卡片后，显示明文并倒计时删除
+  function revealMessage(m) {
+    const el = messagesEl.querySelector('[data-id="' + m.id + '"]');
+    if (!el) return;
+    el.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'wrap';
+
+    if (m.name !== nickname) {
+      const nameEl = document.createElement('div');
+      nameEl.className = 'name';
+      nameEl.textContent = m.name;
+      wrap.appendChild(nameEl);
+    }
+
+    if (m.image) {
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble img-bubble';
+      const img = document.createElement('img');
+      img.src = m.image;
+      img.alt = '图片';
+      bubble.appendChild(img);
+      wrap.appendChild(bubble);
+    } else {
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble burn-revealed';
+      bubble.textContent = m.text || '';
+      wrap.appendChild(bubble);
+    }
+
+    const time = new Date(m.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const timeEl = document.createElement('div');
+    timeEl.className = 'time';
+    timeEl.textContent = time + ' · 🔥 ' + burnAfter + ' 秒后消失';
+    wrap.appendChild(timeEl);
+
+    el.appendChild(wrap);
+    scrollBottom();
+    // 倒计时后删除
+    setTimeout(() => removeMessage(m.id), burnAfter * 1000);
+  }
+
+  // 其他端：对方已查看，提示即将消失
+  function markBurned(id, text) {
+    const el = messagesEl.querySelector('[data-id="' + id + '"]');
+    if (!el) return;
+    const bubble = el.querySelector('.bubble');
+    if (bubble) {
+      bubble.className = 'bubble burn-revealed';
+      bubble.textContent = text + ' ';
+      const tag = document.createElement('span');
+      tag.style.cssText = 'font-size:11px;color:#e65100;';
+      tag.textContent = '🔥 已被查看，即将消失';
+      bubble.appendChild(tag);
+    }
+    setTimeout(() => removeMessage(id), burnAfter * 1000);
+  }
+
+  // 从界面移除某条消息
+  function removeMessage(id) {
+    const el = messagesEl.querySelector('[data-id="' + id + '"]');
+    if (el) el.remove();
+    updateEmpty();
+  }
+
+  function addSystem(text) {
+    const div = document.createElement('div');
+    div.className = 'sys';
+    div.textContent = text;
+    messagesEl.appendChild(div);
+    scrollBottom();
+  }
+
+  function updateEmpty() {
+    emptyEl.style.display = messagesEl.children.length === 0 ? 'block' : 'none';
+  }
+
+  function scrollBottom() {
+    requestAnimationFrame(() => {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  // ===== 发送消息 =====
+  function send() {
+    const text = input.value.trim();
+    if (!text) return;
+    if (!ws || ws.readyState !== 1) {
+      addSystem('⚠️ 未连接，稍后重试');
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'chat', name: nickname, text, burn: burnMode }));
+    input.value = '';
+    input.style.height = 'auto';
+    input.focus();
+  }
+
+  // ===== 发送图片 =====
+  function sendImage(file) {
+    if (!file) return;
+    if (!ws || ws.readyState !== 1) {
+      addSystem('⚠️ 未连接，稍后重试');
+      return;
+    }
+    // 限制 3MB
+    if (file.size > 3 * 1024 * 1024) {
+      addSystem('⚠️ 图片过大（最大 3MB）');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64 = e.target.result; // data:image/xxx;base64,...
+      ws.send(JSON.stringify({ type: 'chat', name: nickname, image: base64, burn: burnMode }));
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // ===== 查看大图 =====
+  window.viewImage = function (src) {
+    window.open(src, '_blank');
+  };
+
+  // ===== 悬浮窗切换 =====
+  function toggleMinimize() {
+    isMinimized = !isMinimized;
+    document.body.classList.toggle('minimized', isMinimized);
+  }
+
+  // ===== 清空 =====
+  function requestClear() {
+    if (!ws || ws.readyState !== 1) return;
+    $('confirm').classList.add('show');
+  }
+
+  // ===== 事件绑定 =====
+  $('joinBtn').addEventListener('click', enter);
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') enter();
+  });
+  $('pwdInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') enter();
+  });
+
+  $('sendBtn').addEventListener('click', send);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+  });
+
+  // 图片按钮
+  $('imgBtn').addEventListener('click', () => {
+    $('imgInput').click();
+  });
+  $('imgInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) sendImage(file);
+    e.target.value = ''; // 允许重复选同一张图
+  });
+
+  // 悬浮球：点击切换悬浮/全屏
+  $('floatBall').addEventListener('click', toggleMinimize);
+  // 悬浮球关闭按钮
+  $('floatClose').addEventListener('click', () => {
+    floatClosed = true;
+    $('floatBall').style.display = 'none';
+    $('floatClose').style.display = 'none';
+    document.body.classList.remove('minimized');
+  });
+
+  // 阅后即焚开关（默认关闭，需要时手动开启）
+  $('burnBtn').addEventListener('click', () => {
+    burnMode = !burnMode;
+    $('burnBtn').classList.toggle('active', burnMode);
+    const label = $('burnBtn').querySelector('.burn-label');
+    if (burnMode) {
+      label.textContent = '阅后·开';
+      input.placeholder = '阅后即焚：对方查看后自动消失…';
+      addSystem('🔥 已开启阅后即焚，本条消息对方点击查看后会自动消失');
+    } else {
+      label.textContent = '阅后·关';
+      input.placeholder = '输入消息…';
+      addSystem('已关闭阅后即焚，消息将正常保存');
+    }
+  });
+
+  // 点击阅后即焚占位卡片 → 查看
+  messagesEl.addEventListener('click', (e) => {
+    const bubble = e.target.closest('[data-reveal]');
+    if (!bubble) return;
+    const id = bubble.getAttribute('data-reveal');
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'reveal', id }));
+    }
+  });
+
+  $('menuBtn').addEventListener('click', () => menu.classList.toggle('show'));
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target) && e.target !== $('menuBtn')) {
+      menu.classList.remove('show');
+    }
+  });
+
+  $('clearBtn').addEventListener('click', () => {
+    menu.classList.remove('show');
+    requestClear();
+  });
+
+  $('confirmCancel').addEventListener('click', () => $('confirm').classList.remove('show'));
+  $('confirmOk').addEventListener('click', () => {
+    $('confirm').classList.remove('show');
+    ws.send(JSON.stringify({ type: 'clear' }));
+  });
+
+  $('leaveBtn').addEventListener('click', () => {
+    menu.classList.remove('show');
+    if (ws) ws.close();
+    ws = null;
+    headerEl.style.display = 'none';
+    messagesEl.style.display = 'none';
+    footerEl.style.display = 'none';
+    $('floatBall').style.display = 'none';
+    $('floatClose').style.display = 'none';
+    document.body.classList.remove('minimized');
+    isMinimized = false;
+    floatClosed = false;
+    loginEl.style.display = 'flex';
+    messagesEl.innerHTML = '';
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# 聊天记录（隐私，不提交）
+messages.json
+
+# 依赖与日志
+node_modules/
+npm-debug.log*
+
+# 环境变量
+.env
+.env.*
+
+# 系统文件
+.DS_Store
+Thumbs.db

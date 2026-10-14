@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: wuhan-liaotian
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "3000"
+      - key: AUTO_CLEAR
+        value: "0"
+      - key: DATA_FILE
+        value: /app/messages.json
+      - key: ROOM_PASSWORD
+        value: "1314"
