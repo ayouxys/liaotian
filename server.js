@@ -27,6 +27,8 @@ const AUTO_CLEAR = parseInt(process.env.AUTO_CLEAR || '0', 10); // 秒，0=关�
 const BURN_AFTER = parseInt(process.env.BURN_AFTER || '5', 10); // 阅后即焚查看后延迟删除秒数
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'messages.json');
 const ROOM_PASSWORD = process.env.ROOM_PASSWORD || ''; // 进入密码（空 = 不校验，开放进入）
+const MONGO_URI = process.env.MONGO_URI || ''; // MongoDB 连接字符串（空 = 回退到文件存储）
+const MAX_IMAGE_BYTES = parseInt(process.env.MAX_IMAGE_BYTES || '15', 10) * 1024 * 1024; // 单张图片上限，默认 15MB（MongoDB 单文档 16MB）
 const PUBLIC_DIR = __dirname;
 
 if (Number.isNaN(PORT) || PORT <= 0 || PORT > 65535) {
@@ -48,15 +50,50 @@ let messages = [];
 /** @type {Set<import('ws').WebSocket>} 简化：用原生 WebSocket 集合 */
 const clients = new Set();
 
-// ============ 持久化 ============
-function loadMessages() {
+// ============ 存储层 ============
+// 优先使用 MongoDB（持久化，重启不丢）；未配置 MONGO_URI 时回退到本地文件。
+let db = null;          // MongoDB 的 collection 引用
+let mongoClient = null; // MongoDB 客户端（用于关闭连接）
+
+async function loadMessages() {
+  if (MONGO_URI) {
+    // 使用 MongoDB
+    try {
+      const { MongoClient } = require('mongodb');
+      mongoClient = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 10000 });
+      await mongoClient.connect();
+      db = mongoClient.db('wuhan_chat').collection('messages');
+      const docs = await db.find({}).sort({ time: 1 }).limit(500).toArray();
+      messages = docs.map(doc => {
+        const { _id, ...rest } = doc;
+        // MongoDB Binary → Buffer
+        if (rest.image && rest.image.data && rest.image.data.buffer) {
+          rest.image.data = Buffer.from(rest.image.data.buffer);
+        }
+        return rest;
+      });
+      console.log(`[存储] 已连接 MongoDB，加载 ${messages.length} 条历史消息`);
+      return;
+    } catch (err) {
+      console.error('[存储] MongoDB 连接失败，回退到文件存储:', err.message);
+      mongoClient = null;
+      db = null;
+    }
+  }
+  // 回退：文件存储
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf8');
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        messages = parsed;
-        console.log(`[存储] 已加载 ${messages.length} 条历史消息`);
+        // 文件存储：图片 base64 字符串 → Buffer
+        messages = parsed.map(m => {
+          if (m.image && typeof m.image.data === 'string') {
+            m.image.data = Buffer.from(m.image.data, 'base64');
+          }
+          return m;
+        });
+        console.log(`[存储] 已加载 ${messages.length} 条历史消息（文件）`);
         return;
       }
     }
@@ -66,9 +103,28 @@ function loadMessages() {
   }
 }
 
-function saveMessages() {
+async function saveMessages() {
+  if (db) {
+    // MongoDB：全量重写（消息量小，简单可靠）
+    try {
+      await db.deleteMany({});
+      if (messages.length > 0) {
+        await db.insertMany(messages.map(m => ({ ...m })));
+      }
+    } catch (err) {
+      console.error('[存储] MongoDB 保存失败:', err.message);
+    }
+    return;
+  }
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(messages), 'utf8');
+    // 文件存储：图片 Buffer → base64 字符串
+    const toFile = messages.map(m => {
+      if (m.image && Buffer.isBuffer(m.image.data)) {
+        return { ...m, image: { ...m.image, data: m.image.data.toString('base64') } };
+      }
+      return m;
+    });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(toFile), 'utf8');
   } catch (err) {
     console.error('[存储] 保存失败:', err.message);
   }
@@ -96,8 +152,20 @@ function maskForOthers(record) {
   return record;
 }
 
+// 把消息里的图片 Buffer 转成可 JSON 传输的 data URL 字符串
+function serializeForClient(record) {
+  const r = { ...record };
+  if (r.image && Buffer.isBuffer(r.image.data)) {
+    r.image = {
+      mime: r.image.mime || 'image/jpeg',
+      data: 'data:' + (r.image.mime || 'image/jpeg') + ';base64,' + r.image.data.toString('base64'),
+    };
+  }
+  return r;
+}
+
 // ============ 消息处理 ============
-function handleMessage(ws, raw) {
+async function handleMessage(ws, raw) {
   let msg;
   try {
     msg = JSON.parse(raw);
@@ -121,7 +189,7 @@ function handleMessage(ws, raw) {
       ws.nickname = name;
       ws.send(JSON.stringify({
         type: 'history',
-        messages: messages.map(maskForOthers),
+        messages: messages.map(m => serializeForClient(maskForOthers(m))),
         autoClear: AUTO_CLEAR,
         burnAfter: BURN_AFTER,
         selfId: ws.selfId,
@@ -136,17 +204,11 @@ function handleMessage(ws, raw) {
     case 'chat': {
       const name = String(msg.name || ws.nickname || '匿名').trim().slice(0, 30) || '匿名';
       const text = String(msg.text || '').trim();
-      const image = String(msg.image || ''); // base64 图片数据
-      if (!text && !image) return;
-      // 图片消息大小限制（约 3MB base64）
-      if (image && image.length > 4000000) {
-        ws.send(JSON.stringify({ type: 'error', text: '图片过大（最大约 3MB）' }));
-        return;
-      }
       if (text.length > 2000) {
         ws.send(JSON.stringify({ type: 'error', text: '消息过长（最多 2000 字）' }));
         return;
       }
+      if (!text) return;
       const record = {
         id: newId(),
         name,
@@ -155,17 +217,29 @@ function handleMessage(ws, raw) {
         burn: msg.burn === true, // 阅后即焚标记
         revealed: false,         // 是否已被查看
       };
-      if (image) {
-        record.image = image;
-      }
       messages.push(record);
       // 只保留最近 200 条，防止图片导致膨胀
       if (messages.length > 200) {
         messages = messages.slice(messages.length - 200);
       }
-      saveMessages();
+      await saveMessages();
       // 下发给其他端的消息：阅后即焚的消息不携带明文内容，只给一个占位
-      broadcast({ type: 'chat', message: maskForOthers(record) });
+      broadcast({ type: 'chat', message: serializeForClient(maskForOthers(record)) });
+      break;
+    }
+
+    case 'image': {
+      // 图片消息：先声明（本帧），随后紧跟一个二进制帧携带图片数据
+      const name = String(msg.name || ws.nickname || '匿名').trim().slice(0, 30) || '匿名';
+      const mime = String(msg.mime || 'image/jpeg').slice(0, 50);
+      ws.pendingImage = {
+        id: newId(),
+        name,
+        mime,
+        time: Date.now(),
+        burn: msg.burn === true,
+        revealed: false,
+      };
       break;
     }
 
@@ -178,10 +252,10 @@ function handleMessage(ws, raw) {
       if (record.revealed) return; // 已被查看过，不再处理
 
       record.revealed = true;
-      saveMessages();
+      await saveMessages();
 
       // 把明文发给请求查看的那一端
-      ws.send(JSON.stringify({ type: 'revealed', message: record }));
+      ws.send(JSON.stringify({ type: 'revealed', message: serializeForClient(record) }));
 
       // 通知其他端：这条消息已被查看，将消失
       broadcast({
@@ -203,7 +277,7 @@ function handleMessage(ws, raw) {
     case 'clear': {
       // 一键清空：清服务器 + 通知所有人
       messages = [];
-      saveMessages();
+      await saveMessages();
       broadcast({ type: 'cleared' });
       console.log('[清空] 所有聊天记录已被清空');
       break;
@@ -212,6 +286,41 @@ function handleMessage(ws, raw) {
     default:
       ws.send(JSON.stringify({ type: 'error', text: '未知消息类型' }));
   }
+}
+
+// ============ 图片二进制消息处理 ============
+async function handleBinaryMessage(ws, buf) {
+  // 无对应图片声明时，忽略
+  if (!ws.pendingImage) return;
+
+  const pending = ws.pendingImage;
+  ws.pendingImage = null;
+
+  // 大小限制
+  if (buf.length > MAX_IMAGE_BYTES) {
+    ws.send(JSON.stringify({ type: 'error', text: '图片过大（最大 ' + (MAX_IMAGE_BYTES / 1024 / 1024) + 'MB）' }));
+    return;
+  }
+
+  // 构造图片消息记录
+  const record = {
+    id: pending.id,
+    name: pending.name,
+    time: pending.time,
+    burn: pending.burn,
+    revealed: false,
+    image: {
+      mime: pending.mime || 'image/jpeg',
+      data: buf, // Buffer，MongoDB 会自动存为 Binary，文件存储时转 base64
+    },
+  };
+  messages.push(record);
+  // 只保留最近 200 条，防止图片导致膨胀
+  if (messages.length > 200) {
+    messages = messages.slice(messages.length - 200);
+  }
+  await saveMessages();
+  broadcast({ type: 'chat', message: serializeForClient(maskForOthers(record)) });
 }
 
 // ============ 定时自动清空 ============
@@ -290,6 +399,7 @@ server.on('upgrade', (req, socket, head) => {
     socket,
     nickname: '匿名',
     selfId: newId(),
+    pendingImage: null, // 等待接收的图片声明（image 声明帧后紧跟二进制帧）
     readyState: 1,
     send(data) {
       try {
@@ -376,6 +486,8 @@ server.on('upgrade', (req, socket, head) => {
           fragmented = null;
           if (opcode === 0x1) {
             handleMessage(ws, complete.toString('utf8'));
+          } else if (opcode === 0x2) {
+            handleBinaryMessage(ws, complete);
           }
         }
         continue;
@@ -387,7 +499,7 @@ server.on('upgrade', (req, socket, head) => {
           if (fin) {
             const complete = fragmented;
             fragmented = null;
-            handleMessage(ws, complete.toString('utf8'));
+            handleBinaryMessage(ws, complete);
           }
         }
         continue;
@@ -421,15 +533,18 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 // ============ 启动 ============
-loadMessages();
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('==============================================');
-  console.log('  无痕聊天 已启动');
-  console.log(`  本机访问：  http://localhost:${PORT}`);
-  console.log(`  局域网访问：http://<本机IP>:${PORT}`);
-  console.log(`  健康检查：  http://localhost:${PORT}/health`);
-  console.log(`  自动清空：  ${AUTO_CLEAR > 0 ? '每 ' + AUTO_CLEAR + ' 秒' : '关闭'}`);
-  console.log(`  阅后即焚：  查看后 ${BURN_AFTER} 秒自动删除`);
-  console.log(`  数据文件：  ${DATA_FILE}`);
-  console.log('==============================================');
-});
+(async () => {
+  await loadMessages();
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log('==============================================');
+    console.log('  无痕聊天 已启动');
+    console.log(`  本机访问：  http://localhost:${PORT}`);
+    console.log(`  局域网访问：http://<本机IP>:${PORT}`);
+    console.log(`  健康检查：  http://localhost:${PORT}/health`);
+    console.log(`  存储方式：  ${db ? 'MongoDB（持久化）' : '本地文件（临时）'}`);
+    console.log(`  自动清空：  ${AUTO_CLEAR > 0 ? '每 ' + AUTO_CLEAR + ' 秒' : '关闭'}`);
+    console.log(`  阅后即焚：  查看后 ${BURN_AFTER} 秒自动删除`);
+    console.log(`  数据文件：  ${DATA_FILE}`);
+    console.log('==============================================');
+  });
+})();

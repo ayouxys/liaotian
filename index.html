@@ -601,24 +601,78 @@
     input.focus();
   }
 
-  // ===== 发送图片 =====
-  function sendImage(file) {
+  // ===== 发送图片（压缩 + 二进制传输） =====
+  // 超过阈值先压缩，再以二进制帧发送（不再用 base64 文本）
+  const MAX_SRC_BYTES = 15 * 1024 * 1024;  // 与服务端 MAX_IMAGE_BYTES 对齐
+  const COMPRESS_THRESHOLD = 1024 * 1024;  // 超过 1MB 才压缩
+
+  function compressImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        // 计算目标长边：超过 1600px 才缩小
+        const MAX_SIDE = 1600;
+        let w = img.naturalWidth;
+        let h = img.naturalHeight;
+        if (Math.max(w, h) > MAX_SIDE) {
+          const ratio = MAX_SIDE / Math.max(w, h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        // GIF/PNG 转 JPEG 压缩（透明背景补白）；JPEG 直接压
+        const mime = (file.type === 'image/png' || file.type === 'image/gif') ? 'image/jpeg' : (file.type || 'image/jpeg');
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('压缩失败')); return; }
+          resolve({ blob, mime: blob.type || mime, w, h });
+        }, mime, 0.82);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片加载失败')); };
+      img.src = url;
+    });
+  }
+
+  async function sendImage(file) {
     if (!file) return;
     if (!ws || ws.readyState !== 1) {
       addSystem('⚠️ 未连接，稍后重试');
       return;
     }
-    // 限制 3MB
-    if (file.size > 3 * 1024 * 1024) {
-      addSystem('⚠️ 图片过大（最大 3MB）');
+
+    let blob = file;
+    let mime = file.type || 'image/jpeg';
+    // 超过阈值先压缩
+    if (file.size > COMPRESS_THRESHOLD) {
+      try {
+        addSystem('🖼 正在压缩图片…');
+        const r = await compressImage(file);
+        blob = r.blob;
+        mime = r.mime;
+      } catch (e) {
+        addSystem('⚠️ 图片压缩失败，尝试原图发送');
+        blob = file;
+        mime = file.type || 'image/jpeg';
+      }
+    }
+
+    // 压缩后仍超上限则拒绝
+    if (blob.size > MAX_SRC_BYTES) {
+      addSystem('⚠️ 图片过大（最大 15MB）');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target.result; // data:image/xxx;base64,...
-      ws.send(JSON.stringify({ type: 'chat', name: nickname, image: base64, burn: burnMode }));
-    };
-    reader.readAsDataURL(file);
+
+    blob.arrayBuffer().then((buf) => {
+      // 1) 先发声明帧（文本）
+      ws.send(JSON.stringify({ type: 'image', name: nickname, mime: mime, burn: burnMode }));
+      // 2) 再发二进制帧（图片数据）
+      ws.send(buf);
+    });
   }
 
   // ===== 查看大图 =====

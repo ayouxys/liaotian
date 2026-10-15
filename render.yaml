@@ -13,3 +13,5 @@ services:
         value: /app/messages.json
       - key: ROOM_PASSWORD
         value: "1314"
+      - key: MONGO_URI
+        value: ""
